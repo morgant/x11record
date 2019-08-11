@@ -1,0 +1,87 @@
+#!/bin/sh
+
+# 
+# x11record - Screencast recording for X11 on OpenBSD
+#
+# Based on:
+#
+# - https://www.youtube.com/watch?v=WihowkXozqQ
+# - http://eradman.com/posts/screencasting.html
+#
+# CHANGE LOG:
+# 
+# v0.1   - 2019-08-10 - Morgan Aldridge <morgant@makkintosshu.com>
+#                       Initial development.
+# 
+# (c) 2019 Morgan T. Aldridge
+# License TBD
+#
+
+# exit if we're not running on OpenBSD
+if [ "$(uname -s)" != "OpenBSD" ]; then
+  echo "ERROR! $0 currently only supports OpenBSD. Exiting."
+  exit 1
+fi
+
+# require audio recording
+if [ "$(sysctl kern.audio.record)" != "kern.audio.record=1" ]; then
+  echo "ERROR! $0 requires audio recording to be enabled! Exiting."
+  exit 1
+fi
+
+# require ffmpeg
+if ! which ffmpeg > /dev/null; then
+  echo "ERROR! $0 requires ffmpeg! Exiting."
+  exit 1
+fi
+
+audio_device="rsnd/1"
+video_resolution="1280x800"
+video_framerate=5
+recording_path="${HOME}/Movies"
+recording_name="recording"
+datetime="$(date +%Y%m%d-%H%M%S)"
+
+# start audio recording
+audio_file="${recording_path}/${recording_name}-audio-${datetime}.wav"
+aucat -f "${audio_device}" -o "${audio_file}" &
+aucat_pid=$!
+
+# prevent ctrl-c from interrupting this script
+trap '' INT
+
+# start video recording
+video_file="${recording_path}/${recording_name}-video-${datetime}.mkv"
+ffmpeg \
+  -loglevel fatal \
+  -f x11grab \
+  -video_size "${video_resolution}" \
+  -framerate "${video_framerate}" \
+  -i "${DISPLAY}" \
+  -vcodec ffv1 \
+  "${video_file}"
+
+# stop the audio recording when ffmpeg stops
+kill -INT $aucat_pid
+
+# allow ctrl-c again
+trap - INT
+
+# transcode the audio & video files into a single m4v file
+echo -n "Transcoding recording... "
+final_file="${recording_path}/${recording_name}-${datetime}.m4v"
+ffmpeg \
+  -loglevel fatal \
+  -i "${video_file}" \
+  -i "${audio_file}" \
+  -map 0:0 \
+  -map 1:0 \
+  -c:v libx264 \
+  -preset slow \
+  -crf 14 \
+  -pix_fmt yuv420p \
+  -movflags +faststart \
+  -c:a aac \
+  -q:a 6 \
+  "${final_file}"
+echo "Done."
